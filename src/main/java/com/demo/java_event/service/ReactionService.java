@@ -1,20 +1,19 @@
 package com.demo.java_event.service;
 
 import com.demo.java_event.model.Reaction;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Service
 public class ReactionService {
@@ -22,11 +21,10 @@ public class ReactionService {
 
     private final List<Reaction> reactions = new CopyOnWriteArrayList<>();
     private final Map<UUID, SseEmitter> sseEmitters = new ConcurrentHashMap<>();
+    private final Map<UUID, List<Reaction>> messageBuffer = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
-
     public String saveReaction(final Reaction reaction) {
-//        reaction.setTs(LocalDateTime.now());
         reactions.add(reaction);
 
         sseEmitters.forEach((uuid, sseEmitter) -> {
@@ -34,79 +32,87 @@ public class ReactionService {
                 logger.info("Sending message to UUID {} {}", uuid, reaction);
                 sseEmitter.send(reaction);
             } catch (IOException e) {
-                System.out.println("ioexception came...." + uuid);
-                e.printStackTrace();
+                logger.error("IOException occurred for UUID {}: {}", uuid, e.getMessage());
+                bufferMessage(uuid, reaction);
             } catch (IllegalStateException e) {
                 if (e.getMessage().contains("ResponseBodyEmitter has already completed")) {
                     sseEmitter.complete();
                     sseEmitters.remove(uuid);
+                    bufferMessage(uuid, reaction);
                 }
+            } catch (Exception e) {
+                logger.error("Exception occurred for UUID {}: {}", uuid, e.getMessage());
+                bufferMessage(uuid, reaction);
             }
         });
-
-        System.out.println(reactions);
 
         return "";
     }
 
     public SseEmitter subscribe(final UUID uuid) {
-        SseEmitter sseEmitter = null;
-        try {
-            logger.info("received session id {}", uuid);
+        SseEmitter sseEmitter = new SseEmitter(30_000L);
+        sseEmitters.put(uuid, sseEmitter);
 
-//        sseEmitters.computeIfPresent(uuid, (key, value) -> {
-//            value.complete();
-//            return null;
-//        });
+        sseEmitter.onCompletion(() -> {
+            logger.info("SSE emitter completed for UUID {}", uuid);
+            sseEmitters.remove(uuid);
+        });
 
-            if (sseEmitters.get(uuid) != null) {
-                logger.info("Found existing uuid {}", uuid);
-                SseEmitter oldSseEmitter = sseEmitters.get(uuid);
-            }
+        sseEmitter.onTimeout(() -> {
+            logger.error("SSE emitter timed out for UUID {}", uuid);
+            sseEmitters.remove(uuid);
+            sseEmitter.complete();
+        });
 
-            sseEmitter = new SseEmitter(30_000L);
-            sseEmitters.put(uuid, sseEmitter);
+        sseEmitter.onError((e) -> {
+            logger.error("SSE emitter error for UUID {}: {}", uuid, e.getMessage());
+            sseEmitters.remove(uuid);
+            sseEmitter.completeWithError(e);
+        });
 
-            SseEmitter finalSseEmitter = sseEmitter;
-            sseEmitter.onCompletion(() -> {
-                logger.info("sse emitter is completed");
-                sseEmitters.remove(uuid);
-            });
+        resendBufferedMessages(uuid, sseEmitter);
 
-            sseEmitter.onTimeout(() -> {
-                logger.error("sse timed out");
-                sseEmitters.remove(uuid);
-                finalSseEmitter.complete();
-            });
-
-            sseEmitter.onError((e) -> {
-                logger.error("sse error", e);
-                sseEmitters.remove(uuid);
-                finalSseEmitter.complete();
-            });
-
-            try {
-                sseEmitter.send(SseEmitter.event().name("connected").data("connected"));
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        } catch (Exception e) {
-            logger.error("Exception occurred while subscribing..", e);
-        }
-        SseEmitter finalSseEmitter1 = sseEmitter;
         executor.execute(() -> {
             try {
-                while (true) {
-                    finalSseEmitter1.send(SseEmitter.event().name("ping").data("heartbeat"));
-                    Thread.sleep(3000); // Send every 30 seconds
+                while (sseEmitters.containsKey(uuid)) {
+                    try {
+                        sseEmitter.send(SseEmitter.event().name("ping").data("heartbeat"));
+                    } catch (IOException e) {
+                        logger.error("IOException while sending heartbeat to UUID {}: {}", uuid, e.getMessage());
+                        sseEmitters.remove(uuid);
+                        sseEmitter.completeWithError(e);
+                        break;
+                    }
+                    Thread.sleep(10_000);
                 }
             } catch (Exception e) {
-                finalSseEmitter1.complete();
-                sseEmitters.remove(finalSseEmitter1);
+                logger.error("Exception in heartbeat thread for UUID {}: {}", uuid, e.getMessage());
+                sseEmitters.remove(uuid);
+                sseEmitter.completeWithError(e);
             }
         });
 
-        logger.info("Sending sse emitter for session ID: {}", uuid);
+        logger.info("Sending SSE emitter for session ID: {}", uuid);
         return sseEmitter;
+    }
+
+    private void bufferMessage(UUID uuid, Reaction reaction) {
+        messageBuffer.computeIfAbsent(uuid, k -> new CopyOnWriteArrayList<>()).add(reaction);
+    }
+
+    private void resendBufferedMessages(UUID uuid, SseEmitter sseEmitter) {
+        List<Reaction> bufferedMessages = messageBuffer.get(uuid);
+        if (bufferedMessages != null) {
+            bufferedMessages.forEach(reaction -> {
+                try {
+                    logger.info("Resending buffered message to UUID {} {}", uuid, reaction);
+                    sseEmitter.send(reaction);
+                } catch (IOException e) {
+                    logger.error("Failed to resend buffered message to UUID {}: {}", uuid, e.getMessage());
+                }
+            });
+
+            bufferedMessages.clear();
+        }
     }
 }
