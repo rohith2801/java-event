@@ -24,7 +24,7 @@ public class ReactionController {
 
     @PostMapping
     public ResponseEntity<Void> saveReaction(@RequestBody Reaction reaction) throws Exception {
-        reactionService.saveReaction(reaction);
+        reactionService.saveReaction("event1", reaction);
         return ResponseEntity.ok().build();
     }
 
@@ -39,6 +39,6 @@ public class ReactionController {
         response.setHeader("Content-Type", "text/event-stream");
 
 
-        return reactionService.subscribe(sessionId);
+        return reactionService.subscribe("event1", sessionId);
     }
 }
