@@ -35,17 +35,15 @@ public class ReactionService {
                     logger.info("Sending reaction to client {} for event {}", uuid, eventId);
                     sseEmitter.send(reaction);
                 } catch (IOException e) {
-                    logger.error("IOException for client {}: {}", uuid, e.getMessage());
-                    bufferMessage(eventId, uuid, reaction);
+                    logger.warn("Client {} disconnected abruptly:", uuid, e);
                     cleanupEmitter(eventId, uuid); // Clean up the emitter
                 } catch (IllegalStateException e) {
                     if (e.getMessage().contains("ResponseBodyEmitter has already completed")) {
-                        logger.error("Emitter already completed for client {}: {}", uuid, e.getMessage());
+                        logger.warn("Emitter already completed for client {}:", uuid, e);
                         cleanupEmitter(eventId, uuid); // Clean up the emitter
                     }
                 } catch (Exception e) {
-                    logger.error("Exception for client {}: {}", uuid, e.getMessage());
-                    bufferMessage(eventId, uuid, reaction);
+                    logger.error("Unexpected exception for client {}:", uuid, e);
                     cleanupEmitter(eventId, uuid); // Clean up the emitter
                 }
             });
@@ -133,7 +131,7 @@ public class ReactionService {
                         logger.info("Resending buffered message to client {} for event {}", uuid, eventId);
                         sseEmitter.send(reaction);
                     } catch (IOException e) {
-                        logger.error("Failed to resend buffered message to client {}: {}", uuid, e.getMessage());
+                        logger.error("Failed to resend buffered message to client {}:", uuid, e);
                     }
                 });
                 bufferedMessages.clear();
@@ -150,7 +148,7 @@ public class ReactionService {
                 try {
                     sseEmitter.send(SseEmitter.event().name("ping").data("heartbeat"));
                 } catch (IOException e) {
-                    logger.error("Heartbeat failed for client {} on event {}: {}", uuid, eventId, e.getMessage());
+                    logger.error("Heartbeat failed for client {} on event {}:", uuid, eventId, e);
                     cleanupEmitter(eventId, uuid); // Clean up the emitter
                 }
             }

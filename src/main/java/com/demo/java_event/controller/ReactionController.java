@@ -23,22 +23,14 @@ public class ReactionController {
     private ReactionService reactionService;
 
     @PostMapping
-    public ResponseEntity<Void> saveReaction(@RequestBody Reaction reaction) throws Exception {
+    public ResponseEntity<Void> saveReaction(@RequestBody Reaction reaction) {
         reactionService.saveReaction("event1", reaction);
         return ResponseEntity.ok().build();
     }
 
 
-    @GetMapping(value = "/subscribe", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter subscribe(@RequestParam final UUID sessionId, HttpServletResponse response) {
-        System.out.println(sessionId);
-
-        response.setHeader("Cache-Control", "no-store, no-transform");
-        response.setHeader("X-Accel-Buffering", "no"); // For Nginx
-        response.setHeader("Connection", "keep-alive");
-        response.setHeader("Content-Type", "text/event-stream");
-
-
+    @GetMapping(value = "/subscribe")
+    public SseEmitter subscribe(@RequestParam final UUID sessionId) {
         return reactionService.subscribe("event1", sessionId);
     }
 }
