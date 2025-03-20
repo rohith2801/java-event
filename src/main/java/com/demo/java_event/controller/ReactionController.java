@@ -28,7 +28,6 @@ public class ReactionController {
         return ResponseEntity.ok().build();
     }
 
-
     @GetMapping(value = "/subscribe")
     public SseEmitter subscribe(@RequestParam final UUID sessionId) {
         return reactionService.subscribe("event1", sessionId);

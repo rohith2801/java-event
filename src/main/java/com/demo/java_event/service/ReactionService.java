@@ -14,37 +14,34 @@ import java.util.concurrent.*;
 public class ReactionService {
     private static final Logger logger = LoggerFactory.getLogger(ReactionService.class);
 
-    // Map to store SseEmitters by event ID and client UUID
     private final Map<String, Map<UUID, SseEmitter>> eventEmitters = new ConcurrentHashMap<>();
 
-    // Map to buffer messages by event ID and client UUID
     private final Map<String, Map<UUID, List<Reaction>>> eventMessageBuffers = new ConcurrentHashMap<>();
 
-    // Scheduled executor for heartbeat tasks
     private final ScheduledExecutorService heartbeatExecutor = Executors.newScheduledThreadPool(1);
 
     /**
      * Saves a reaction and sends it to all subscribers of the event.
      */
     public String saveReaction(final String eventId, final Reaction reaction) {
-        // Get all emitters for the event
         Map<UUID, SseEmitter> emitters = eventEmitters.get(eventId);
         if (emitters != null) {
             emitters.forEach((uuid, sseEmitter) -> {
                 try {
+                    bufferMessage(eventId, uuid, reaction);
                     logger.info("Sending reaction to client {} for event {}", uuid, eventId);
                     sseEmitter.send(reaction);
                 } catch (IOException e) {
                     logger.warn("Client {} disconnected abruptly:", uuid, e);
-                    cleanupEmitter(eventId, uuid); // Clean up the emitter
+                    cleanupEmitter(eventId, uuid);
                 } catch (IllegalStateException e) {
                     if (e.getMessage().contains("ResponseBodyEmitter has already completed")) {
                         logger.warn("Emitter already completed for client {}:", uuid, e);
-                        cleanupEmitter(eventId, uuid); // Clean up the emitter
+                        cleanupEmitter(eventId, uuid);
                     }
                 } catch (Exception e) {
                     logger.error("Unexpected exception for client {}:", uuid, e);
-                    cleanupEmitter(eventId, uuid); // Clean up the emitter
+                    cleanupEmitter(eventId, uuid);
                 }
             });
         }
@@ -57,11 +54,10 @@ public class ReactionService {
     public SseEmitter subscribe(final String eventId, final UUID uuid) {
         SseEmitter sseEmitter = new SseEmitter(30_000L); // 30-second timeout
 
-        // Add the emitter to the event's emitter map
         eventEmitters.computeIfAbsent(eventId, k -> new ConcurrentHashMap<>()).put(uuid, sseEmitter);
 
-        // Set up completion, timeout, and error handlers
         sseEmitter.onCompletion(() -> {
+            eventMessageBuffers.getOrDefault(eventId, Collections.emptyMap()).remove(uuid);
             logger.info("SSE emitter completed for client {} on event {}", uuid, eventId);
             cleanupEmitter(eventId, uuid);
         });
@@ -78,10 +74,8 @@ public class ReactionService {
             sseEmitter.completeWithError(e);
         });
 
-        // Resend buffered messages for this client
         resendBufferedMessages(eventId, uuid, sseEmitter);
 
-        // Schedule heartbeat for this client
         scheduleHeartbeat(eventId, uuid, sseEmitter);
 
         logger.info("Client {} subscribed to event {}", uuid, eventId);
@@ -149,7 +143,7 @@ public class ReactionService {
                     sseEmitter.send(SseEmitter.event().name("ping").data("heartbeat"));
                 } catch (IOException e) {
                     logger.error("Heartbeat failed for client {} on event {}:", uuid, eventId, e);
-                    cleanupEmitter(eventId, uuid); // Clean up the emitter
+                    cleanupEmitter(eventId, uuid);
                 }
             }
         }, 10, 10, TimeUnit.SECONDS); // Send heartbeat every 10 seconds
