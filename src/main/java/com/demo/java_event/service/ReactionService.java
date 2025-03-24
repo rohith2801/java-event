@@ -30,7 +30,8 @@ public class ReactionService {
                 try {
                     bufferMessage(eventId, uuid, reaction);
                     logger.info("Sending reaction to client {} for event {}", uuid, eventId);
-                    sseEmitter.send(reaction);
+                    sseEmitter.send(SseEmitter.event().name("reactions").data(reaction));
+//                    sseEmitter.send(reaction);
                 } catch (IOException e) {
                     logger.warn("Client {} disconnected abruptly:", uuid, e);
                     cleanupEmitter(eventId, uuid);
@@ -52,9 +53,12 @@ public class ReactionService {
      * Subscribes a client to an event and returns an SseEmitter.
      */
     public SseEmitter subscribe(final String eventId, final UUID uuid) {
-        SseEmitter sseEmitter = new SseEmitter(30_000L); // 30-second timeout
+        SseEmitter sseEmitter = new SseEmitter(10 * 60 * 1000L); // long live.
+
+        //pingMessage(eventId, uuid, sseEmitter);
 
         eventEmitters.computeIfAbsent(eventId, k -> new ConcurrentHashMap<>()).put(uuid, sseEmitter);
+        scheduleHeartbeat(eventId, uuid, sseEmitter);
 
         sseEmitter.onCompletion(() -> {
             eventMessageBuffers.getOrDefault(eventId, Collections.emptyMap()).remove(uuid);
@@ -74,9 +78,7 @@ public class ReactionService {
             sseEmitter.completeWithError(e);
         });
 
-        resendBufferedMessages(eventId, uuid, sseEmitter);
-
-        scheduleHeartbeat(eventId, uuid, sseEmitter);
+//        resendBufferedMessages(eventId, uuid, sseEmitter);
 
         logger.info("Client {} subscribed to event {}", uuid, eventId);
         return sseEmitter;
@@ -137,15 +139,28 @@ public class ReactionService {
      * Schedules a heartbeat for a client.
      */
     private void scheduleHeartbeat(String eventId, UUID uuid, SseEmitter sseEmitter) {
-        heartbeatExecutor.scheduleAtFixedRate(() -> {
-            if (eventEmitters.getOrDefault(eventId, Collections.emptyMap()).containsKey(uuid)) {
-                try {
-                    sseEmitter.send(SseEmitter.event().name("ping").data("heartbeat"));
-                } catch (IOException e) {
-                    logger.error("Heartbeat failed for client {} on event {}:", uuid, eventId, e);
-                    cleanupEmitter(eventId, uuid);
-                }
+        heartbeatExecutor.scheduleAtFixedRate(() -> sendHeartbeat(eventId, uuid, sseEmitter), 3, 3, TimeUnit.SECONDS); // Send heartbeat every 10 seconds
+    }
+
+    private void sendHeartbeat(String eventId, UUID uuid, SseEmitter sseEmitter) {
+        if (eventEmitters.getOrDefault(eventId, Collections.emptyMap()).containsKey(uuid)) {
+            try {
+                sseEmitter.send(SseEmitter.event().name("ping").data("heartbeat"));
+            } catch (IOException e) {
+                logger.error("Heartbeat failed for client {} on event {}:", uuid, eventId, e);
+                cleanupEmitter(eventId, uuid);
             }
-        }, 10, 10, TimeUnit.SECONDS); // Send heartbeat every 10 seconds
+        }
+    }
+
+    private void pingMessage(String eventId, UUID uuid, SseEmitter sseEmitter) {
+        if (eventEmitters.getOrDefault(eventId, Collections.emptyMap()).containsKey(uuid)) {
+            try {
+                sseEmitter.send(SseEmitter.event().name("initConnection").data("I am connected"));
+            } catch (IOException e) {
+                logger.error("Ping message failed for client {} on event {}:", uuid, eventId, e);
+                cleanupEmitter(eventId, uuid);
+            }
+        }
     }
 }
